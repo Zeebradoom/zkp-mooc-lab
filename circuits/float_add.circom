@@ -143,11 +143,30 @@ template LessThan(n) {
  * Outputs `out` = 1 if `in` is at most `b` bits long, and 0 otherwise.
  */
 template CheckBitLength(b) {
-    assert(b < 254);
-    signal input in;
+    // signal input in;
     signal output out;
 
-    // TODO
+    // component zeroCheck = IsZero();
+    // zeroCheck.in <-- in >> b;
+    // out <== zeroCheck.out;
+
+    signal input in;
+    signal output bits[b];
+
+    for (var i = 0; i < b; i++) {
+        bits[i] <-- (in >> i) & 1;
+        bits[i] * (1 - bits[i]) === 0;
+    }
+    var sum_of_bits = 0;
+    for (var i = 0; i < b; i++) {
+        sum_of_bits += (2 ** i) * bits[i];
+    }
+
+    component checkEqual = IsEqual();
+    checkEqual.in <== [sum_of_bits, in];
+    out <== checkEqual.out;
+
+    
 }
 
 /*
@@ -192,11 +211,17 @@ template CheckWellFormedness(k, p) {
  * Right-shifts `b`-bit long `x` by `shift` bits to output `y`, where `shift` is a public circuit parameter.
  */
 template RightShift(b, shift) {
-    assert(shift < b);
     signal input x;
     signal output y;
 
-    // TODO
+    signal rem <-- x % (1 << shift);
+    component num2bits = Num2Bits(b);
+    num2bits.in <== x;
+
+    y <-- (x - rem) / (1 << shift);
+    x === y * (1 << shift) + rem;
+
+
 }
 
 /*
@@ -258,7 +283,49 @@ template LeftShift(shift_bound) {
     signal input skip_checks;
     signal output y;
 
-    // TODO
+    component checkZero = LessThan(252);
+    checkZero.in[0] <== -1;
+    checkZero.in[1] <== shift;
+    checkZero.out === 1;
+    
+    // if its 1 it swaps, 0 it doesnt
+    component switchh = Switcher();
+    switchh.sel <== skip_checks;
+    switchh.L <== shift;
+    switchh.R <== 0;
+
+    component shift_bound_check = LessThan(shift_bound);
+    shift_bound_check.in[0] <== switchh.outL;
+    shift_bound_check.in[1] <== shift_bound;
+    shift_bound_check.out === 1;
+
+    //following code takes the exponent of 2^shift 
+    var maxBits = 8;
+
+    signal exp[maxBits];
+    signal holdTempVal[maxBits];
+    signal temp[maxBits];
+
+    component num2Bits = Num2Bits(maxBits);
+    num2Bits.in <== shift;
+
+    signal temp2;
+
+    exp[0] <== 2;
+    holdTempVal[0] <== 1;
+    for (var i = 0; i < maxBits; i++) {
+        temp[i] <== num2Bits.bits[i] * exp[i] + (1 - num2Bits.bits[i]); //if num2Bits.bits[i] is 1, then temp[i] = exp[i], else temp[i] = 1
+        if (i < maxBits - 1) {
+            holdTempVal[i + 1] <== holdTempVal[i] * temp[i];
+            exp[i + 1] <== exp[i] * exp[i];
+        } else {
+            temp2 <== holdTempVal[i] * temp[i];
+        }
+    }
+
+    //multiplies this 2^shift by y, left shifting it while ensuring soundness
+    y <== x * temp2;
+
 }
 
 /*
@@ -273,16 +340,48 @@ template MSNZB(b) {
     signal input skip_checks;
     signal output one_hot[b];
 
-    // TODO
+    //check if valid skip_checks or in value
+    component lessCheck = LessThan(b);
+    lessCheck.in[0] <== 0;
+    lessCheck.in[1] <== in + skip_checks;
+    lessCheck.out === 1;
+
+    //convert all to bits
+    component num2bits = Num2Bits(b);
+    num2bits.in <== in;
+
+    //use suffix product to create mask
+    signal mask[b];
+    mask[b-1] <== 1;
+    for (var i = b-2; i >= 0; i--) {
+        mask[i] <== mask[i+1] * (1 - num2bits.bits[i+1]);
+    }
+
+    for (var i = 0; i < b; i++) {
+        one_hot[i] <== num2bits.bits[i] * mask[i];
+    }
+
+    //check suffix product if sound
+    component checkSound = IfThenElse();
+    checkSound.cond <== skip_checks;
+    checkSound.L <== 0;
+    checkSound.R <== mask[0] * (1-num2bits.bits[0]);
+
+    checkSound.out === 0;
+
 }
 
 /*
  * Normalizes the input floating-point number.
- * The input is a floating-point number with a `k`-bit exponent `e` and a `P`+1-bit *unnormalized* mantissa `m` with precision `p`, where `m` is assumed to be non-zero.
- * The output is a floating-point number representing the same value with exponent `e_out` and a *normalized* mantissa `m_out` of `P`+1-bits and precision `P`.
+ * The input is a floating-point number with a `k`-bit exponent `e` and a 
+ `P`+1-bit *unnormalized* mantissa `m` with precision `p`, where `m` is assumed to be non-zero.
+ * The output is a floating-point number representing the same value with exponent 
+ `e_out` and a *normalized* mantissa `m_out` of `P`+1-bits and precision `P`.
  * Enforces that `m` is non-zero as a zero-value can not be normalized.
- * If `skip_checks` = 1, then we don't care about the output and the non-zero constraint is not enforced.
+ * If `skip_checks` = 1, then we don't care about the output and the non-zero 
+ constraint is not enforced.
  */
+
 template Normalize(k, p, P) {
     signal input e;
     signal input m;
@@ -291,7 +390,30 @@ template Normalize(k, p, P) {
     signal output m_out;
     assert(P > p);
 
-    // TODO
+    //finds the most significant non-zero bit
+    component msnzb_finder = MSNZB(P + 1);
+    msnzb_finder.in <== m;
+    msnzb_finder.skip_checks <== skip_checks;
+
+    //finds the exponent difference
+    signal one_hot_arr[P + 1] <== msnzb_finder.one_hot;
+    var exponent_diff = 0;
+    var idx;
+
+    //sums the one_hot_arr
+    for (idx = 0; idx <= P; idx++) {
+        exponent_diff += idx * one_hot_arr[idx];
+    }
+
+    e_out <== e + exponent_diff - p;
+
+    //shifts mantissa to the left
+    signal shifting_value <== P - exponent_diff;
+    component leftShiftComponent = LeftShift(252);
+    leftShiftComponent.x <== m;
+    leftShiftComponent.shift <== shifting_value;
+    leftShiftComponent.skip_checks <== skip_checks;
+    m_out <== leftShiftComponent.y;
 }
 
 /*
@@ -301,11 +423,207 @@ template Normalize(k, p, P) {
  * The output is a normalized floating-point number with exponent `e_out` and mantissa `m_out` of `p`+1-bits and scale `p`.
  * Enforces that inputs are well-formed.
  */
+
+ template FloatAdd(k, p) {
+    signal input e[2];
+    signal input m[2];
+    signal output e_out;
+    signal output m_out;
+
+    component check_wf[2];
+
+    // Check well-formdness of the input numbers
+    for (var i = 0; i < 2; i++) {
+        check_wf[i] = CheckWellFormedness(k, p);
+        check_wf[i].e <== e[i];
+        check_wf[i].m <== m[i];
+    }
+
+    // ensure magnitude of e[0] <= magnitude of e[1]
+    component cmp_magnitudes = LessThan(k + p + 1);
+    for (var i = 0; i < 2; i++) {
+        cmp_magnitudes.in[i] <== m[i] + e[i] * (1 << (p + 1));
+    }
+
+    // switch the inputs based on the magnitude comparison
+    component switch_exponents = Switcher();
+    component switch_mantissas = Switcher();
+    
+    switch_exponents.sel <== cmp_magnitudes.out;
+    switch_exponents.L <== e[0];
+    switch_exponents.R <== e[1];
+
+    switch_mantissas.sel <== cmp_magnitudes.out;
+    switch_mantissas.L <== m[0];
+    switch_mantissas.R <== m[1];
+
+    // compute the exponent difference
+    var alpha_m = switch_mantissas.outL;
+    var alpha_e = switch_exponents.outL;
+    var beta_m = switch_mantissas.outR;
+    var beta_e = switch_exponents.outR;
+
+    signal exponent_diff <== alpha_e - beta_e;
+
+    // check if the exponent difference is greater than p
+    component diff_greater_check = LessThan(k);
+    diff_greater_check.in[0] <== p + 1;
+    diff_greater_check.in[1] <== exponent_diff;
+
+    // if the exponent difference is greater than p, then the output is the
+    // larger of the two inputs
+    component alpha_e_is_zero = IsZero();
+    alpha_e_is_zero.in <== alpha_e;
+
+    component skip_condition = OR();
+    skip_condition.a <== diff_greater_check.out;
+    skip_condition.b <== alpha_e_is_zero.out;
+
+    // Use If-Then-Else components to handle different cases
+    //  If skip_condition.out is true, it selects the value 1. 
+    //If false, it selects the value of alpha_m. 
+    //This means that if the skip condition is met, the left-shift operation will be skipped, 
+    //and the value of 1 will be used instead of the actual mantissa alpha_m.
+    component if_else_alpha_m = IfThenElse();
+    if_else_alpha_m.cond <== skip_condition.out;
+    if_else_alpha_m.L <== 1;
+    if_else_alpha_m.R <== alpha_m;
+
+    //  If skip_condition.out is true, it selects the value 0. If false, it selects the value of exponent_diff. 
+    component if_else_diff = IfThenElse();
+    if_else_diff.cond <== skip_condition.out;
+    if_else_diff.L <== 0;
+    if_else_diff.R <== exponent_diff;
+
+    //  If skip_condition.out is true, it selects the value 1. If false, it selects the value of beta_e.
+    component if_else_beta_e = IfThenElse();
+    if_else_beta_e.cond <== skip_condition.out;
+    if_else_beta_e.L <== 1;
+    if_else_beta_e.R <== beta_e;
+
+    //shifts mantissa to the left
+    component m_alpha_shift = LeftShift(p + 2);
+    m_alpha_shift.x <== if_else_alpha_m.out;
+    m_alpha_shift.shift <== if_else_diff.out;
+    m_alpha_shift.skip_checks <== 0;
+
+    // normalizes the result to fit within the required floating-point representation 
+    component norm = Normalize(k, p, 2 * p + 1);
+    norm.e <== if_else_beta_e.out;
+    norm.m <== m_alpha_shift.y + beta_m;
+    norm.skip_checks <== 0;
+
+    // RoundAndCheck component that rounds 
+    component round_chk = RoundAndCheck(k, p, 2 * p + 1);
+    round_chk.e <== norm.e_out;
+    round_chk.m <== norm.m_out;
+
+    // selects the final exponent value based on the skip_condition.out. 
+    //If the skip condition is true, the original exponent of the larger number (alpha_e) is selected; 
+    //otherwise, the rounded exponent (round_chk.e_out) is used.
+    component if_else_e_result = IfThenElse();
+    if_else_e_result.cond <== skip_condition.out;
+    if_else_e_result.L <== alpha_e;
+    if_else_e_result.R <== round_chk.e_out;
+
+    // If  skip condition is true, the original mantissa of the larger number (alpha_m) is selected; 
+    //otherwise, the rounded mantissa (round_chk.m_out) is used.
+    component if_else_m_result = IfThenElse();
+    if_else_m_result.cond <== skip_condition.out;
+    if_else_m_result.L <== alpha_m;
+    if_else_m_result.R <== round_chk.m_out;
+
+    e_out <== if_else_e_result.out;
+    m_out <== if_else_m_result.out;
+}
+
+
 template FloatAdd(k, p) {
     signal input e[2];
     signal input m[2];
     signal output e_out;
     signal output m_out;
 
-    // TODO
+    // Check well formdness of the input numbers
+    component checker[2];
+    for (var i = 0; i < 2; i++) {
+        checker[i] = CheckWellFormedness(k, p);
+        checker[i].e <== e[i];
+        checker[i].m <== m[i];
+    }
+
+    // Compare the magnitudes of the input numbers
+    component Compare = LessThan(k + p + 1);
+    for (var i = 0; i < 2; i++) {
+        Compare.in[i] <== m[i] + e[i] * (1 << (p + 1));
+    }
+
+    // Switch the inputs based on the comparison result
+    component eSwitch = Switcher();
+    component mSwitch = Switcher();
+    eSwitch.sel <== Compare.out;
+    eSwitch.L <== e[0];
+    eSwitch.R <== e[1];
+    mSwitch.sel <== Compare.out;
+    mSwitch.L <== m[0];
+    mSwitch.R <== m[1];
+
+    // Assign alpha and beta variables
+    var alpha_m = mSwitch.outL;
+    var alpha_e = eSwitch.outL;
+    var beta_m = mSwitch.outR;
+    var beta_e = eSwitch.outR;
+
+    // Calculate the exponent difference and check conditions
+    signal diff <== alpha_e - beta_e;
+    component diff_check = LessThan(k);
+    diff_check.in[0] <== p + 1;
+    diff_check.in[1] <== diff;
+    component alpha_e_check = IsZero();
+    alpha_e_check.in <== alpha_e;
+    component skip_condition = OR();
+    skip_condition.a <== diff_check.out;
+    skip_condition.b <== alpha_e_check.out;
+
+    // Use If-Then-Else components to handle different cases
+    component if_else_alpha_m = IfThenElse();
+    if_else_alpha_m.cond <== skip_condition.out;
+    if_else_alpha_m.L <== 1;
+    if_else_alpha_m.R <== alpha_m;
+    component if_else_diff = IfThenElse();
+    if_else_diff.cond <== skip_condition.out;
+    if_else_diff.L <== 0;
+    if_else_diff.R <== diff;
+    component if_else_beta_e = IfThenElse();
+    if_else_beta_e.cond <== skip_condition.out;
+    if_else_beta_e.L <== 1;
+    if_else_beta_e.R <== beta_e;
+
+    // Shift, normalize, and round the result
+    component m_alpha_left_shift = LeftShift(p + 2);
+    m_alpha_left_shift.x <== if_else_alpha_m.out;
+    m_alpha_left_shift.shift <== if_else_diff.out;
+    m_alpha_left_shift.skip_checks <== 0;
+    component normalize = Normalize(k, p, 2 * p + 1);
+    normalize.e <== if_else_beta_e.out;
+    normalize.m <== m_alpha_left_shift.y + beta_m;
+    normalize.skip_checks <== 0;
+    component round_chk = RoundAndCheck(k, p, 2 * p + 1);
+    round_chk.e <== normalize.e_out;
+    round_chk.m <== normalize.m_out;
+
+    // Assign final output values using If-Then-Else components
+    component if_else_e_result = IfThenElse();
+    if_else_e_result.cond <== skip_condition.out;
+    if_else_e_result.L <== alpha_e;
+    if_else_e_result.R <== round_chk.e_out;
+
+    component if_else_m_result = IfThenElse();
+    if_else_m_result.cond <== skip_condition.out;
+    if_else_m_result.L <== alpha_m;
+    if_else_m_result.R <== round_chk.m_out;
+
+    // Set the output signals
+    e_out <== if_else_e_result.out;
+    m_out <== if_else_m_result.out;
 }
