@@ -211,28 +211,28 @@ template CheckWellFormedness(k, p) {
 /*
  * Right-shifts `b`-bit long `x` by `shift` bits to output `y`, where `shift` is a public circuit parameter.
  */
-// template RightShift(b, shift) {
-//     signal input x;
-//     signal output y;
-
-//     signal rem <-- x % (1 << shift);
-//     component num2bits = Num2Bits(b);
-//     num2bits.in <== x;
-
-//     y <-- (x - rem) / (1 << shift);
-//     x === y * (1 << shift) + rem;
-// }
-template RightShift(shift) {
+template RightShift(b, shift) {
     signal input x;
     signal output y;
 
     signal rem <-- x % (1 << shift);
-    component num2bits = Num2Bits(shift);
-    num2bits.in <== rem;
+    component num2bits = Num2Bits(b);
+    num2bits.in <== x;
 
     y <-- (x - rem) / (1 << shift);
     x === y * (1 << shift) + rem;
 }
+// template RightShift(shift) {
+//     signal input x;
+//     signal output y;
+
+//     signal rem <-- x % (1 << shift);
+//     component num2bits = Num2Bits(shift);
+//     num2bits.in <== rem;
+
+//     y <-- (x - rem) / (1 << shift);
+//     x === y * (1 << shift) + rem;
+// }
 
 /*
  * Rounds the input floating-point number and checks to ensure that rounding does not make the mantissa unnormalized.
