@@ -371,14 +371,6 @@ template MSNZB(b) {
         one_hot[i] <== num2bits.bits[i] * mask[i];
     }
 
-    //check suffix product if sound
-    component checkSound = IfThenElse();
-    checkSound.cond <== skip_checks;
-    checkSound.L <== 0;
-    checkSound.R <== mask[0] * (1-num2bits.bits[0]);
-
-    checkSound.out === 0;
-
 }
 
 /*
